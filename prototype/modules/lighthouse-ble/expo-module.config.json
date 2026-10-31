@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["LighthouseBleModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.lighthouseble.LighthouseBleModule"]
+  }
+}

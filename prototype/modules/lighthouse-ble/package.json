@@ -1,0 +1,8 @@
+{
+  "name": "lighthouse-ble",
+  "version": "0.1.0",
+  "description": "Bluetooth Low Energy advertising and scanning for the Lighthouse prototype",
+  "main": "index.ts",
+  "license": "UNLICENSED",
+  "private": true
+}
