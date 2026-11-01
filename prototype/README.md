@@ -21,15 +21,8 @@ Both phones broadcast and scan at the same time, which is how the Lighthouse kno
 ## Running it
 
 It uses a custom native module (`modules/lighthouse-ble`), so it cannot run in Expo Go.
-It needs a development build on two real phones (Bluetooth does not work in simulators).
-
-```bash
-npm install
-npx expo run:android --device   # needs Android Studio and a phone with USB debugging
-npx expo run:ios --device       # needs a Mac with Xcode and a signing team
-# or build in the cloud without local tools:
-npx eas-cli@latest build --profile development --platform android
-```
+You need to build the app and install it on two real phones (Bluetooth does not work in simulators).
+**Step-by-step instructions for Android and iPhone are in [BUILDING.md](BUILDING.md).**
 
 ## Test plan
 
