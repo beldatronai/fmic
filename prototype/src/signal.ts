@@ -7,8 +7,9 @@ export type Band = 'very close' | 'close' | 'nearby' | 'far';
 export type Sample = { t: number; raw: number; smooth: number };
 
 export type TrackerOptions = {
-  /** How much the true signal is expected to drift between readings (dB^2). */
-  processNoise: number;
+  /** How much the true signal is expected to drift per second (dB^2/s). Scaled by the time
+   * between readings, so smoothing behaves the same whether a phone reports 2 or 30 times a second. */
+  processNoisePerSecond: number;
   /** How noisy a single reading is (dB^2); crowds make this large. */
   measurementNoise: number;
   /** Window used for the trend slope. */
@@ -20,7 +21,7 @@ export type TrackerOptions = {
 };
 
 export const DEFAULT_OPTIONS: TrackerOptions = {
-  processNoise: 0.5,
+  processNoisePerSecond: 5,
   measurementNoise: 16,
   trendWindowMs: 4000,
   trendDeadband: 0.4,
@@ -35,6 +36,7 @@ const PATH_LOSS_EXPONENT = 2.5;
 export class SignalTracker {
   private estimate: number | null = null;
   private variance = 0;
+  private lastT = 0;
   readonly samples: Sample[] = [];
 
   constructor(private readonly options: TrackerOptions = DEFAULT_OPTIONS) {}
@@ -44,11 +46,13 @@ export class SignalTracker {
       this.estimate = rssi;
       this.variance = this.options.measurementNoise;
     } else {
-      this.variance += this.options.processNoise;
+      const dt = Math.max(0, t - this.lastT) / 1000;
+      this.variance += this.options.processNoisePerSecond * dt;
       const gain = this.variance / (this.variance + this.options.measurementNoise);
       this.estimate += gain * (rssi - this.estimate);
       this.variance *= 1 - gain;
     }
+    this.lastT = t;
     this.samples.push({ t, raw: rssi, smooth: this.estimate });
     const cutoff = t - this.options.historyMs;
     while (this.samples.length > 0 && this.samples[0].t < cutoff) this.samples.shift();

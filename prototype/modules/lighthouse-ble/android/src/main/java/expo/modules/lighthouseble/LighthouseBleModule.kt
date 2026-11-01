@@ -74,7 +74,9 @@ class LighthouseBleModule : Module() {
     val settings = AdvertiseSettings.Builder()
       .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
       .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
-      .setConnectable(false)
+      // Connectable so the advertisement is scannable and the scan response (with our id) is
+      // served; nothing accepts connections, as there is no GATT server.
+      .setConnectable(true)
       .build()
     // The 128-bit UUID fills most of the 31-byte packet, so role + id go in the scan response.
     val data = AdvertiseData.Builder()

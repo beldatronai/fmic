@@ -48,6 +48,22 @@ test('standing still reads as steady', () => {
   assert.equal(tracker.trend(8000), 'steady');
 });
 
+test('smoothing catches up in similar time at slow and fast report rates', () => {
+  // A 10 dB step: the smoothed level should catch up in similar time at 5 Hz and 25 Hz.
+  const catchUpMs = (hz: number) => {
+    const tracker = new SignalTracker();
+    const step = 1000 / hz;
+    for (let t = 0; t < 5000; t += step) tracker.add(-80, t);
+    for (let t = 5000; t < 20000; t += step) {
+      if (tracker.add(-70, t) > -72) return t - 5000;
+    }
+    return Infinity;
+  };
+  const slow = catchUpMs(5);
+  const fast = catchUpMs(25);
+  assert.ok(Math.abs(slow - fast) < 1000, `5 Hz ${slow} ms vs 25 Hz ${fast} ms`);
+});
+
 test('old samples are dropped after 30 seconds', () => {
   const tracker = new SignalTracker();
   for (let i = 0; i <= 400; i++) tracker.add(-70, i * 100);

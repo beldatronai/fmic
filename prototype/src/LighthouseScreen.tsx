@@ -31,9 +31,11 @@ export function LighthouseScreen({ selfId, onExit }: Props) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       }
     }
-    // Forget seekers that walked away again, so a second approach alerts again.
+    // Forget seekers that walked clearly back out (6 dB of hysteresis so a signal hovering
+    // at the threshold doesn't buzz over and over), so a second approach alerts again.
     for (const id of announced.current) {
-      if (!seekers.some((s) => s.id === id)) announced.current.delete(id);
+      const seeker = seekers.find((s) => s.id === id);
+      if (!seeker || (seeker.tracker.level ?? -999) < threshold - 6) announced.current.delete(id);
     }
   });
 

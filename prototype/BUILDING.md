@@ -124,4 +124,8 @@ With a free Apple ID the app stops opening after 7 days; rebuild to renew it.
   home screen and re-enter the mode to restart Bluetooth.
 - **Build fails in the Swift or Kotlin Bluetooth code**: this native code had not been compiled
   before this branch was pushed. Paste the error into the project thread and it will be fixed.
+- **Android sees nothing at all**: some Android versions only return Bluetooth scan results while
+  the phone's Location setting is switched on. Turn it on in quick settings.
+- **Android stops finding phones after switching modes many times**: Android blocks apps that
+  restart Bluetooth scanning more than 5 times in 30 seconds. Wait 30 seconds and try again.
 - **"Unable to resolve module"** after pulling new code: run `npm install` again.
