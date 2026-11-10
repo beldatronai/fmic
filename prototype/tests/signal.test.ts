@@ -1,7 +1,19 @@
 /// <reference types="node" />
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { band, pulseIntervalMs, roughMetres, SignalTracker } from '../src/signal';
+import {
+  band,
+  calibrateFrom,
+  levelFor,
+  levelForMetres,
+  levelRange,
+  LEVEL_EDGES_METRES,
+  MAX_LEVEL,
+  metresFor,
+  rssiAt,
+  SignalTracker,
+} from '../src/signal';
+import { nextPulseAt, PULSES } from '../src/pulse';
 
 // Deterministic noise so the test is repeatable.
 function noise(seed: number) {
@@ -70,13 +82,59 @@ test('old samples are dropped after 30 seconds', () => {
   assert.ok(tracker.samples[0].t >= 40000 - 30000);
 });
 
-test('bands, rough distance and haptic pace', () => {
-  assert.equal(band(-55), 'very close');
-  assert.equal(band(-70), 'close');
-  assert.equal(band(-80), 'nearby');
-  assert.equal(band(-95), 'far');
-  assert.ok(Math.abs(roughMetres(-59) - 1) < 1e-9);
-  assert.ok(roughMetres(-84) > roughMetres(-70));
-  assert.equal(pulseIntervalMs(-95), 2000);
-  assert.equal(pulseIntervalMs(-50), 300);
+test('distance is measured from the calibrated "together" reading', () => {
+  const cal = { rssiTogether: -78 }; // the reading seen in the field with phones 4 cm apart
+  assert.ok(metresFor(-78, cal) < 0.1, 'together reads as together, not 6 m');
+  assert.ok(Math.abs(metresFor(rssiAt(5, cal), cal) - 5) < 1e-9);
+  assert.ok(metresFor(-90, cal) > metresFor(-85, cal));
+  assert.equal(levelFor(-78, cal), MAX_LEVEL);
+});
+
+test('levels: big steps far away, small steps in the last metres', () => {
+  assert.equal(levelForMetres(30), 0);
+  assert.equal(levelForMetres(10), 2);
+  assert.equal(levelForMetres(3), 5);
+  assert.equal(levelForMetres(0.3), 9);
+  // Edge spacing shrinks towards the end.
+  for (let i = 1; i < LEVEL_EDGES_METRES.length; i++) {
+    assert.ok(LEVEL_EDGES_METRES[i] < LEVEL_EDGES_METRES[i - 1]);
+  }
+  assert.equal(levelRange(0), 'over 20 m');
+  assert.equal(levelRange(5), '2.5-3.5 m');
+  assert.equal(levelRange(9), 'under 0.6 m');
+  assert.equal(band(9), 'very close');
+  assert.equal(band(0), 'far');
+});
+
+test('level sticks near an edge (hysteresis)', () => {
+  const cal = { rssiTogether: -45 };
+  const edge = rssiAt(5, cal); // between level 3 and 4
+  assert.equal(levelFor(edge + 0.5), 4);
+  assert.equal(levelFor(edge + 0.5, cal, 3), 3, 'just past the edge keeps the old level');
+  assert.equal(levelFor(edge + 3, cal, 3), 4, 'clearly past the edge moves');
+  assert.equal(levelFor(edge - 0.5, cal, 4), 4);
+  assert.equal(levelFor(edge - 3, cal, 4), 3);
+});
+
+test('buzzing speeds up early and changes gently at the end', () => {
+  assert.equal(PULSES.length, MAX_LEVEL + 1);
+  for (let i = 1; i < PULSES.length; i++) assert.ok(PULSES[i].intervalMs < PULSES[i - 1].intervalMs);
+  const firstHalf = PULSES[0].intervalMs - PULSES[4].intervalMs;
+  const lastHalf = PULSES[5].intervalMs - PULSES[9].intervalMs;
+  assert.ok(firstHalf > 3 * lastHalf);
+});
+
+test('both phones pick the same pulse times from the clock', () => {
+  assert.equal(nextPulseAt(10_000, 500), 10_500);
+  assert.equal(nextPulseAt(10_480, 500), 11_000, 'a timer firing early does not pulse twice');
+  assert.equal(nextPulseAt(10_123, 500), 10_500);
+  // Two phones whose clocks read slightly differently still agree on the next pulse.
+  assert.equal(nextPulseAt(20_100, 800), nextPulseAt(20_160, 800));
+});
+
+test('calibration takes the median of recent readings', () => {
+  const samples = [-80, -50, -79, -78, -77, -78].map((raw, i) => ({ t: 1000 + i * 100, raw, smooth: raw }));
+  assert.deepEqual(calibrateFrom(samples, 1600), { rssiTogether: -78 });
+  assert.equal(calibrateFrom(samples.slice(0, 3), 1600), null);
+  assert.equal(calibrateFrom(samples, 60_000), null, 'old readings are ignored');
 });

@@ -13,5 +13,7 @@ export const styles = StyleSheet.create({
   button: { borderRadius: 10, padding: 16, alignItems: 'center' },
   buttonText: { color: '#000', fontSize: 18, fontWeight: '700' },
   row: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+  code: { fontSize: 56, fontWeight: '800', letterSpacing: 8 },
+  codeInput: { minWidth: 160, fontSize: 18 },
   small: { borderWidth: 1, borderColor: '#ccc', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14 },
 });

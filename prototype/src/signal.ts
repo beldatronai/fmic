@@ -28,10 +28,6 @@ export const DEFAULT_OPTIONS: TrackerOptions = {
   historyMs: 30000,
 };
 
-// Rough path-loss model. Both values need calibrating per phone model in the field.
-const RSSI_AT_ONE_METRE = -59;
-const PATH_LOSS_EXPONENT = 2.5;
-
 /** One-dimensional Kalman filter tracking a single peer's signal level. */
 export class SignalTracker {
   private estimate: number | null = null;
@@ -90,21 +86,85 @@ export class SignalTracker {
   }
 }
 
-export function band(rssi: number): Band {
-  if (rssi >= -60) return 'very close';
-  if (rssi >= -72) return 'close';
-  if (rssi >= -85) return 'nearby';
+// ---- Distance and closeness levels ----
+//
+// Phones differ by 20-30 dB in how strong they transmit and how well they receive, so a fixed
+// "dBm at 1 m" is useless. Instead each pair is calibrated once: hold the phones together and
+// record the signal. Distance is then estimated relative to that reading.
+
+export type Calibration = { rssiTogether: number };
+
+/** Used until the phones are calibrated; typical of two phones touching at high power. */
+export const DEFAULT_CALIBRATION: Calibration = { rssiTogether: -45 };
+
+/** How far apart "together" is, in metres (phones held side by side). */
+const TOGETHER_METRES = 0.05;
+// Indoors and in crowds the signal falls off a bit faster than in free space (2.0).
+const PATH_LOSS_EXPONENT = 2.2;
+
+/** Rough distance in metres from a smoothed signal level. */
+export function metresFor(rssi: number, cal: Calibration = DEFAULT_CALIBRATION): number {
+  const m = TOGETHER_METRES * 10 ** ((cal.rssiTogether - rssi) / (10 * PATH_LOSS_EXPONENT));
+  return Math.max(TOGETHER_METRES, m);
+}
+
+/** Inverse of metresFor: the signal level expected at a given distance. */
+export function rssiAt(metres: number, cal: Calibration = DEFAULT_CALIBRATION): number {
+  return cal.rssiTogether - 10 * PATH_LOSS_EXPONENT * Math.log10(metres / TOGETHER_METRES);
+}
+
+/**
+ * Closeness levels 0 (far) to 9 (right here). The edges are wide far away, so the buzzing speeds
+ * up quickly as soon as you start closing in, and narrow in the last few metres, so the final
+ * approach changes in small steps.
+ */
+export const LEVEL_EDGES_METRES = [20, 12, 8, 5, 3.5, 2.5, 1.8, 1.2, 0.6] as const;
+export const MAX_LEVEL = LEVEL_EDGES_METRES.length; // 9
+
+export function levelForMetres(metres: number): number {
+  return LEVEL_EDGES_METRES.filter((edge) => metres < edge).length;
+}
+
+/** dB the signal must move past an edge before the level changes, so it doesn't flicker. */
+const LEVEL_HYSTERESIS_DB = 2;
+
+/** Closeness level for a smoothed signal level, sticking to `previous` near an edge. */
+export function levelFor(rssi: number, cal: Calibration = DEFAULT_CALIBRATION, previous: number | null = null): number {
+  const level = levelForMetres(metresFor(rssi, cal));
+  if (previous === null || level === previous) return level;
+  // Only move if the signal is clearly past the edge.
+  const nudged = level > previous ? rssi - LEVEL_HYSTERESIS_DB : rssi + LEVEL_HYSTERESIS_DB;
+  return levelForMetres(metresFor(nudged, cal)) === previous ? previous : level;
+}
+
+/** Human-readable distance range for a level, e.g. "2.5-3.5 m". */
+export function levelRange(level: number): string {
+  if (level <= 0) return `over ${LEVEL_EDGES_METRES[0]} m`;
+  if (level >= MAX_LEVEL) return `under ${LEVEL_EDGES_METRES[MAX_LEVEL - 1]} m`;
+  return `${LEVEL_EDGES_METRES[level]}-${LEVEL_EDGES_METRES[level - 1]} m`;
+}
+
+export function band(level: number): Band {
+  if (level >= 8) return 'very close';
+  if (level >= 5) return 'close';
+  if (level >= 2) return 'nearby';
   return 'far';
 }
 
-/** Very rough distance in metres; only good for showing an order of magnitude. */
-export function roughMetres(rssi: number): number {
-  return 10 ** ((RSSI_AT_ONE_METRE - rssi) / (10 * PATH_LOSS_EXPONENT));
+/** Short distance text, with a decimal under 3 m. */
+export function formatMetres(metres: number): string {
+  return metres < 3 ? `${metres.toFixed(1)} m` : `${Math.round(metres)} m`;
 }
 
-/** Haptic pulse interval: slow when far, fast when close. */
-export function pulseIntervalMs(rssi: number): number {
-  const clamped = Math.min(-50, Math.max(-95, rssi));
-  const closeness = (clamped + 95) / 45; // 0 far, 1 close
-  return Math.round(2000 - closeness * 1700);
+/**
+ * Calibration from the last few seconds of readings taken with the phones held together.
+ * Uses the median raw reading, so one odd packet doesn't skew it. Null if too few readings.
+ */
+export function calibrateFrom(samples: readonly Sample[], now: number, windowMs = 3000): Calibration | null {
+  const raws = samples
+    .filter((s) => s.t >= now - windowMs)
+    .map((s) => s.raw)
+    .sort((a, b) => a - b);
+  if (raws.length < 5) return null;
+  return { rssiTogether: raws[Math.floor(raws.length / 2)] };
 }

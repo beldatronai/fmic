@@ -1,10 +1,8 @@
 import { NativeModule, requireNativeModule } from 'expo';
 
-export type PeerRole = 'L' | 'S';
-
 export type PeerEvent = {
-  id: string;
-  role: PeerRole;
+  /** The other phone's broadcast text; see src/protocol.ts. */
+  payload: string;
   rssi: number;
   timestamp: number;
 };
@@ -20,8 +18,10 @@ type LighthouseBleEvents = {
 };
 
 declare class LighthouseBleModule extends NativeModule<LighthouseBleEvents> {
-  /** Starts advertising this phone (role + id) and scanning for other Lighthouse phones. */
-  start(selfId: string, role: PeerRole): void;
+  /** Starts advertising `payload` and scanning for other Lighthouse phones. */
+  start(payload: string): void;
+  /** Changes what this phone advertises without stopping the scan. */
+  setPayload(payload: string): void;
   stop(): void;
 }
 
