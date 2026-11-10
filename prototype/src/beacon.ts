@@ -1,5 +1,5 @@
-// Identity, colour and blink rhythm for each phone. Both phones derive the same colour
-// and rhythm from the Bluetooth id, so a seeker knows what to look for with no network.
+// Ids, colours and blink rhythms. Both phones derive the same colour and rhythm from the
+// group code, so a seeker knows what to look for with no network.
 
 export type Step = { on: boolean; ms: number };
 export type Rhythm = { name: string; steps: Step[] };

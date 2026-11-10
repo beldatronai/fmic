@@ -3,8 +3,8 @@ import ExpoModulesCore
 
 // Must match SERVICE_UUID in the Android module and src/protocol.ts.
 private let serviceUUID = CBUUID(string: "6E4C0001-8F4A-4B5B-9D2E-5A1C1E7A0B01")
-// iOS can only advertise a service UUID and a local name, so the peer's role and id
-// travel in the local name: "LH" + role + id, e.g. "LHLAB12".
+// iOS can only advertise a service UUID and a local name, so the payload (role, group, id and
+// closeness level; see src/protocol.ts) travels in the local name: "LH" + payload.
 private let localNamePrefix = "LH"
 
 public class LighthouseBleModule: Module {
@@ -15,15 +15,19 @@ public class LighthouseBleModule: Module {
 
     Events("onPeer", "onState")
 
-    Function("start") { (selfId: String, role: String) in
+    Function("start") { (payload: String) in
       self.stop()
-      let controller = BluetoothController(selfId: selfId, role: role)
+      let controller = BluetoothController(payload: payload)
       controller.onPeer = { [weak self] peer in self?.sendEvent("onPeer", peer) }
       controller.onState = { [weak self] state, message in
         self?.sendEvent("onState", ["state": state, "message": message])
       }
       self.bluetooth = controller
       controller.start()
+    }
+
+    Function("setPayload") { (payload: String) in
+      self.bluetooth?.setPayload(payload)
     }
 
     Function("stop") {
@@ -42,19 +46,26 @@ public class LighthouseBleModule: Module {
 }
 
 private final class BluetoothController: NSObject, CBCentralManagerDelegate, CBPeripheralManagerDelegate {
-  let selfId: String
-  let role: String
+  private(set) var payload: String
   var onPeer: (([String: Any?]) -> Void)?
   var onState: ((String, String?) -> Void)?
 
   private var central: CBCentralManager?
   private var peripheral: CBPeripheralManager?
-  // Peers whose name arrived in an earlier packet: iOS identifier -> "role:id".
-  private var knownPeers: [UUID: (role: String, id: String)] = [:]
+  // Latest payload seen from each peer (the name is not in every packet): iOS identifier -> payload.
+  private var knownPeers: [UUID: String] = [:]
 
-  init(selfId: String, role: String) {
-    self.selfId = selfId
-    self.role = role
+  init(payload: String) {
+    self.payload = payload
+  }
+
+  /// Restarts advertising with a new payload; the seeker does this when its closeness level changes.
+  func setPayload(_ newPayload: String) {
+    guard newPayload != payload else { return }
+    payload = newPayload
+    guard let peripheral, peripheral.state == .poweredOn else { return }
+    peripheral.stopAdvertising()
+    advertise(peripheral)
   }
 
   func start() {
@@ -99,34 +110,28 @@ private final class BluetoothController: NSObject, CBCentralManagerDelegate, CBP
     if let parsed = Self.parse(advertisementData) {
       knownPeers[peripheral.identifier] = parsed
     }
-    guard let peer = knownPeers[peripheral.identifier] else { return }
-    if peer.id == selfId { return }
+    guard let peerPayload = knownPeers[peripheral.identifier] else { return }
 
+    // JavaScript decodes the payload, checks the group and ignores this phone's own id.
     onPeer?([
-      "id": peer.id,
-      "role": peer.role,
+      "payload": peerPayload,
       "rssi": rssi,
       "timestamp": Date().timeIntervalSince1970 * 1000
     ])
   }
 
-  /// Reads "role + id" from an iOS peer's local name or an Android peer's service data.
-  private static func parse(_ data: [String: Any]) -> (role: String, id: String)? {
+  /// Reads the payload from an iOS peer's local name or an Android peer's service data.
+  private static func parse(_ data: [String: Any]) -> String? {
     if let name = data[CBAdvertisementDataLocalNameKey] as? String,
        name.hasPrefix(localNamePrefix) {
-      return split(String(name.dropFirst(localNamePrefix.count)))
+      return String(name.dropFirst(localNamePrefix.count))
     }
     if let serviceData = data[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data],
        let payload = serviceData[serviceUUID],
        let text = String(data: payload, encoding: .ascii) {
-      return split(text)
+      return text
     }
     return nil
-  }
-
-  private static func split(_ payload: String) -> (role: String, id: String)? {
-    guard payload.count >= 2 else { return nil }
-    return (String(payload.prefix(1)), String(payload.dropFirst()))
   }
 
   // MARK: - Advertising
@@ -136,9 +141,13 @@ private final class BluetoothController: NSObject, CBCentralManagerDelegate, CBP
       onState?(Self.describe(peripheral.state), "advertiser")
       return
     }
+    advertise(peripheral)
+  }
+
+  private func advertise(_ peripheral: CBPeripheralManager) {
     peripheral.startAdvertising([
       CBAdvertisementDataServiceUUIDsKey: [serviceUUID],
-      CBAdvertisementDataLocalNameKey: localNamePrefix + role + selfId
+      CBAdvertisementDataLocalNameKey: localNamePrefix + payload
     ])
   }
 

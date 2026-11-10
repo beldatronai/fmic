@@ -19,7 +19,7 @@ import java.util.UUID
 private val SERVICE_UUID: ParcelUuid =
   ParcelUuid(UUID.fromString("6E4C0001-8F4A-4B5B-9D2E-5A1C1E7A0B01"))
 
-// iOS peers put "LH" + role + id in their local name.
+// iOS peers put "LH" + payload in their local name.
 private const val LOCAL_NAME_PREFIX = "LH"
 
 class LighthouseBleModule : Module() {
@@ -28,21 +28,33 @@ class LighthouseBleModule : Module() {
 
   private var advertiseCallback: AdvertiseCallback? = null
   private var scanCallback: ScanCallback? = null
-  private var selfId: String = ""
+  private var payload: String = ""
 
-  // Peers whose name arrived in an earlier packet: device address -> (role, id).
-  private val knownPeers = mutableMapOf<String, Pair<String, String>>()
+  // Latest payload seen from each peer (it arrives in the scan response, not every packet):
+  // device address -> payload.
+  private val knownPeers = mutableMapOf<String, String>()
 
   override fun definition() = ModuleDefinition {
     Name("LighthouseBle")
 
     Events("onPeer", "onState")
 
-    Function("start") { id: String, role: String ->
+    Function("start") { newPayload: String ->
       stopAll()
-      selfId = id
-      startAdvertising(role + id)
+      payload = newPayload
+      startAdvertising(payload)
       startScanning()
+    }
+
+    // The seeker's closeness level is part of the payload, so this runs whenever it changes.
+    Function("setPayload") { newPayload: String ->
+      if (newPayload != payload) {
+        payload = newPayload
+        if (advertiseCallback != null) {
+          stopAdvertising()
+          startAdvertising(payload)
+        }
+      }
     }
 
     Function("stop") {
@@ -73,12 +85,13 @@ class LighthouseBleModule : Module() {
 
     val settings = AdvertiseSettings.Builder()
       .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-      .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+      .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
       // Connectable so the advertisement is scannable and the scan response (with our id) is
       // served; nothing accepts connections, as there is no GATT server.
       .setConnectable(true)
       .build()
-    // The 128-bit UUID fills most of the 31-byte packet, so role + id go in the scan response.
+    // The 128-bit UUID fills most of the 31-byte packet, so the payload goes in the scan
+    // response: 18 bytes of header leave 13, and the payload is 10.
     val data = AdvertiseData.Builder()
       .addServiceUuid(SERVICE_UUID)
       .setIncludeDeviceName(false)
@@ -90,6 +103,7 @@ class LighthouseBleModule : Module() {
 
     val callback = object : AdvertiseCallback() {
       override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+        // JavaScript drops repeats, so restarts for a new payload don't flood the status line.
         sendState("advertising", null)
       }
 
@@ -145,40 +159,44 @@ class LighthouseBleModule : Module() {
   private fun handleResult(result: ScanResult) {
     val address = result.device.address
     parse(result)?.let { knownPeers[address] = it }
-    val (role, id) = knownPeers[address] ?: return
-    if (id == selfId) return
+    val peerPayload = knownPeers[address] ?: return
 
+    // JavaScript decodes the payload, checks the group and ignores this phone's own id.
     sendEvent(
       "onPeer",
       mapOf(
-        "id" to id,
-        "role" to role,
+        "payload" to peerPayload,
         "rssi" to result.rssi,
         "timestamp" to System.currentTimeMillis().toDouble()
       )
     )
   }
 
-  /** Reads role + id from an Android peer's service data or an iOS peer's local name. */
-  private fun parse(result: ScanResult): Pair<String, String>? {
+  /** Reads the payload from an Android peer's service data or an iOS peer's local name. */
+  private fun parse(result: ScanResult): String? {
     val record = result.scanRecord ?: return null
-    val payload = record.getServiceData(SERVICE_UUID)?.toString(Charsets.US_ASCII)
+    return record.getServiceData(SERVICE_UUID)?.toString(Charsets.US_ASCII)
       ?: record.deviceName?.takeIf { it.startsWith(LOCAL_NAME_PREFIX) }?.removePrefix(LOCAL_NAME_PREFIX)
-      ?: return null
-    if (payload.length < 2) return null
-    return payload.substring(0, 1) to payload.substring(1)
   }
 
   @SuppressLint("MissingPermission")
-  private fun stopAll() {
-    val adapter = bluetoothManager?.adapter
+  private fun stopAdvertising() {
     try {
-      advertiseCallback?.let { adapter?.bluetoothLeAdvertiser?.stopAdvertising(it) }
-      scanCallback?.let { adapter?.bluetoothLeScanner?.stopScan(it) }
+      advertiseCallback?.let { bluetoothManager?.adapter?.bluetoothLeAdvertiser?.stopAdvertising(it) }
     } catch (e: SecurityException) {
       // Permission was revoked while running; nothing left to stop.
     }
     advertiseCallback = null
+  }
+
+  @SuppressLint("MissingPermission")
+  private fun stopAll() {
+    stopAdvertising()
+    try {
+      scanCallback?.let { bluetoothManager?.adapter?.bluetoothLeScanner?.stopScan(it) }
+    } catch (e: SecurityException) {
+      // Permission was revoked while running; nothing left to stop.
+    }
     scanCallback = null
     knownPeers.clear()
   }
